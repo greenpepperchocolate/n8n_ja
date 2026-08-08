@@ -4,6 +4,7 @@ import { useExternalHooks } from '@/app/composables/useExternalHooks';
 import { useTelemetry } from '@n8n/composables/useTelemetry';
 import { useToast } from '@n8n/composables/useToast';
 import { registerToastNotifier } from '@/app/init/toastNotifier';
+import { loadUiLocale } from '@/app/init/uiLocale';
 import { isDataWorkerEnabled } from '@/app/workers/isDataWorkerEnabled';
 import { EnterpriseEditionFeature, VIEWS } from '@/app/constants';
 
@@ -76,6 +77,9 @@ export async function initializeCore() {
 			duration: 0,
 		});
 	}
+
+	// Settings carry `defaultLocale`, so the UI base text can only be swapped once they are in.
+	await loadUiLocale(useRootStore().defaultLocale);
 
 	ssoStore.initialize({
 		authenticationMethod: settingsStore.userManagement.authenticationMethod as AuthenticationMethod,
