@@ -89,7 +89,7 @@ describe('UserManagementMailer', () => {
 			expect(nodeMailer.sendMail).toHaveBeenCalledWith({
 				body: expect.stringContaining(`href="${inviteEmailData.inviteAcceptUrl}"`),
 				emailRecipients: email,
-				subject: 'You have been invited to n8n',
+				subject: 'n8n に招待されました',
 			});
 		});
 
@@ -99,7 +99,7 @@ describe('UserManagementMailer', () => {
 			expect(nodeMailer.sendMail).toHaveBeenCalledWith({
 				body: expect.stringContaining(`href="${passwordResetData.passwordResetUrl}"`),
 				emailRecipients: email,
-				subject: 'n8n password reset',
+				subject: 'n8n のパスワードリセット',
 			});
 		});
 
@@ -123,12 +123,12 @@ describe('UserManagementMailer', () => {
 				expect(nodeMailer.sendMail).toHaveBeenNthCalledWith(index + 1, {
 					body: expect.stringContaining(`href="https://n8n.url/workflow/${workflow.id}"`),
 					emailRecipients: `${id}@user.com`,
-					subject: 'Sharer has shared an n8n workflow with you',
+					subject: 'Sharer さんが n8n のワークフローを共有しました',
 				});
 
 				const callBody = nodeMailer.sendMail.mock.calls[index][0].body;
 				expect(callBody).toContain('Test Workflow');
-				expect(callBody).toContain('A workflow has been shared with you');
+				expect(callBody).toContain('ワークフローが共有されました');
 			});
 		});
 
@@ -150,12 +150,12 @@ describe('UserManagementMailer', () => {
 				expect(nodeMailer.sendMail).toHaveBeenNthCalledWith(index + 1, {
 					body: expect.stringContaining('href="https://n8n.url/home/credentials"'),
 					emailRecipients: `${id}@user.com`,
-					subject: 'Sharer has shared an n8n credential with you',
+					subject: 'Sharer さんが n8n の認証情報を共有しました',
 				});
 
 				const callBody = nodeMailer.sendMail.mock.calls[index][0].body;
 				expect(callBody).toContain('Test Credentials');
-				expect(callBody).toContain('A credential has been shared with you');
+				expect(callBody).toContain('認証情報が共有されました');
 			});
 		});
 
@@ -183,7 +183,7 @@ describe('UserManagementMailer', () => {
 			expect(result.emailSent).toBe(true);
 			expect(nodeMailer.sendMail).toHaveBeenCalledWith({
 				emailRecipients: 'owner@example.com',
-				subject: 'Your n8n API key was revoked',
+				subject: 'n8n の API キーが失効しました',
 				body: expect.stringContaining('href="https://n8n.url/settings/api"'),
 			});
 
@@ -191,7 +191,7 @@ describe('UserManagementMailer', () => {
 			expect(callBody).toContain('Test 123');
 			expect(callBody).toContain('aaa5');
 			expect(callBody).toContain('Jan Ostrówka');
-			expect(callBody).toMatch(/\d{1,2} [A-Z][a-z]{2} \d{4}/);
+			expect(callBody).toMatch(/\d{4}年\d{1,2}月\d{1,2}日/);
 		});
 
 		it('falls back to the revoker email when no name is set', async () => {
@@ -234,14 +234,14 @@ describe('UserManagementMailer', () => {
 			expect(result.emailSent).toBe(true);
 			expect(nodeMailer.sendMail).toHaveBeenCalledWith({
 				emailRecipients: 'owner@example.com',
-				subject: 'Your n8n MCP client access was revoked',
+				subject: 'n8n の MCP クライアントのアクセス権が失効しました',
 				body: expect.stringContaining('href="https://n8n.url/settings/mcp"'),
 			});
 
 			const callBody = nodeMailer.sendMail.mock.calls[0][0].body as string;
 			expect(callBody).toContain('Claude Code');
 			expect(callBody).toContain('Jan Ostrówka');
-			expect(callBody).toMatch(/\d{1,2} [A-Z][a-z]{2} \d{4}/);
+			expect(callBody).toMatch(/\d{4}年\d{1,2}月\d{1,2}日/);
 		});
 
 		it('should send project share notifications', async () => {
@@ -273,12 +273,13 @@ describe('UserManagementMailer', () => {
 				expect(nodeMailer.sendMail).toHaveBeenCalledWith({
 					body: expect.stringContaining(`href="https://n8n.url/projects/${project.id}"`),
 					emailRecipients: `recipient${index + 1}@user.com`,
-					subject: 'Sharer has invited you to a project',
+					subject: 'Sharer さんがプロジェクトに招待しました',
 				});
 
 				const callBody = nodeMailer.sendMail.mock.calls[index][0].body;
+				const roleLabel = sharee.role === PROJECT_EDITOR_ROLE_SLUG ? '編集者' : '閲覧者';
 				expect(callBody).toContain(
-					`You have been added to the <b>${project.name}</b> project as ${sharee.role.replace('project:', '')}`,
+					`<b>${project.name}</b> プロジェクトに${roleLabel}として追加されました`,
 				);
 			});
 		});

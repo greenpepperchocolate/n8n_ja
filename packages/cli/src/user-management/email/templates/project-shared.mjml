@@ -5,10 +5,10 @@
 			<mj-column>
 				<mj-include path="./_logo.mjml" />
 				<mj-text font-size="22px" font-weight="400">
-					You have been added to the <b>{{ projectName }}</b> project as {{ role }}
+					<b>{{ projectName }}</b> プロジェクトに{{ role }}として追加されました
 				</mj-text>
-				<mj-text>This gives you access to all the workflows and credentials in that project.</mj-text>
-				<mj-button href="{{projectUrl}}">View project</mj-button>
+				<mj-text>これにより、このプロジェクト内のすべてのワークフローと認証情報にアクセスできます。</mj-text>
+				<mj-button href="{{projectUrl}}">プロジェクトを表示</mj-button>
 				<mj-include path="./_footer.mjml" />
 			</mj-column>
 		</mj-section>

@@ -83,14 +83,14 @@ describe('NodeMailer', () => {
 
 			await nodeMailer.sendMail({
 				emailRecipients: 'user@test.com',
-				subject: 'You have been invited to n8n',
+				subject: 'n8n に招待されました',
 				body,
 			});
 
 			const sentText = mockTransport.sendMail.mock.calls[0][0].text as string;
-			expect(sentText).toContain('Welcome to n8n!');
+			expect(sentText).toContain('n8n へようこそ！');
 			expect(sentText).toContain('example.com');
-			expect(sentText).toContain('Set up your n8n account (https://n8n.example.com/invite/abc123)');
+			expect(sentText).toContain('n8n アカウントを設定する (https://n8n.example.com/invite/abc123)');
 			expect(sentText).not.toMatch(/<[^>]+>/);
 		});
 
@@ -103,16 +103,16 @@ describe('NodeMailer', () => {
 
 			await nodeMailer.sendMail({
 				emailRecipients: 'user@test.com',
-				subject: 'n8n password reset',
+				subject: 'n8n のパスワードリセット',
 				body,
 			});
 
 			const sentText = mockTransport.sendMail.mock.calls[0][0].text as string;
-			expect(sentText).toContain('Reset your n8n password');
-			expect(sentText).toContain('Hi John,');
+			expect(sentText).toContain('n8n のパスワードをリセット');
+			expect(sentText).toContain('John様');
 			expect(sentText).toContain('example.com');
-			expect(sentText).toContain('Set a new password (https://n8n.example.com/reset/abc123)');
-			expect(sentText).toContain('only valid for 20 minutes');
+			expect(sentText).toContain('新しいパスワードを設定する (https://n8n.example.com/reset/abc123)');
+			expect(sentText).toContain('20分間のみ有効');
 			expect(sentText).not.toMatch(/<[^>]+>/);
 		});
 
@@ -125,14 +125,14 @@ describe('NodeMailer', () => {
 
 			await nodeMailer.sendMail({
 				emailRecipients: 'user@test.com',
-				subject: 'Sharer has shared an n8n workflow with you',
+				subject: 'Sharer さんが n8n のワークフローを共有しました',
 				body,
 			});
 
 			const sentText = mockTransport.sendMail.mock.calls[0][0].text as string;
-			expect(sentText).toContain('A workflow has been shared with you');
-			expect(sentText).toContain('"My Workflow"');
-			expect(sentText).toContain('Open Workflow (https://n8n.example.com/workflow/123)');
+			expect(sentText).toContain('ワークフローが共有されました');
+			expect(sentText).toContain('「My Workflow」');
+			expect(sentText).toContain('ワークフローを開く (https://n8n.example.com/workflow/123)');
 			expect(sentText).not.toMatch(/<[^>]+>/);
 		});
 
@@ -145,14 +145,14 @@ describe('NodeMailer', () => {
 
 			await nodeMailer.sendMail({
 				emailRecipients: 'user@test.com',
-				subject: 'Sharer has shared an n8n credential with you',
+				subject: 'Sharer さんが n8n の認証情報を共有しました',
 				body,
 			});
 
 			const sentText = mockTransport.sendMail.mock.calls[0][0].text as string;
-			expect(sentText).toContain('A credential has been shared with you');
-			expect(sentText).toContain('"My API Key"');
-			expect(sentText).toContain('Open credential (https://n8n.example.com/home/credentials)');
+			expect(sentText).toContain('認証情報が共有されました');
+			expect(sentText).toContain('「My API Key」');
+			expect(sentText).toContain('認証情報を開く (https://n8n.example.com/home/credentials)');
 			expect(sentText).not.toMatch(/<[^>]+>/);
 		});
 
@@ -166,14 +166,14 @@ describe('NodeMailer', () => {
 
 			await nodeMailer.sendMail({
 				emailRecipients: 'user@test.com',
-				subject: 'Sharer has invited you to a project',
+				subject: 'Sharer さんがプロジェクトに招待しました',
 				body,
 			});
 
 			const sentText = mockTransport.sendMail.mock.calls[0][0].text as string;
 			expect(sentText).toContain('My Project');
 			expect(sentText).toContain('editor');
-			expect(sentText).toContain('View project (https://n8n.example.com/projects/123)');
+			expect(sentText).toContain('プロジェクトを表示 (https://n8n.example.com/projects/123)');
 			expect(sentText).not.toMatch(/<[^>]+>/);
 		});
 
@@ -186,14 +186,14 @@ describe('NodeMailer', () => {
 
 			await nodeMailer.sendMail({
 				emailRecipients: 'user@test.com',
-				subject: 'n8n has automatically autodeactivated a workflow',
+				subject: 'n8n がワークフローを自動的に無効化しました',
 				body,
 			});
 
 			const sentText = mockTransport.sendMail.mock.calls[0][0].text as string;
-			expect(sentText).toContain('Workflow automatically deactivated');
-			expect(sentText).toContain('"My Workflow"');
-			expect(sentText).toContain('View Workflow (https://n8n.example.com/workflow/123)');
+			expect(sentText).toContain('ワークフローが自動的に無効化されました');
+			expect(sentText).toContain('「My Workflow」');
+			expect(sentText).toContain('ワークフローを表示 (https://n8n.example.com/workflow/123)');
 			expect(sentText).not.toMatch(/<[^>]+>/);
 		});
 
@@ -209,20 +209,20 @@ describe('NodeMailer', () => {
 
 			await nodeMailer.sendMail({
 				emailRecipients: 'user@test.com',
-				subject: '⚠️ Your workflow failed. Get alerts next time',
+				subject: '⚠️ ワークフローが失敗しました。次回から通知を受け取りましょう',
 				body,
 			});
 
 			const sentText = mockTransport.sendMail.mock.calls[0][0].text as string;
-			expect(sentText).toContain('Hi John,');
-			expect(sentText).toContain('"My Workflow"');
+			expect(sentText).toContain('John様');
+			expect(sentText).toContain('「My Workflow」');
 			expect(sentText).toContain(
-				'Set up my Error Workflow (https://n8n.example.com/templates/2159)',
+				'エラーワークフローを設定する (https://n8n.example.com/templates/2159)',
 			);
-			expect(sentText).toContain('Tutorial (https://www.youtube.com/watch?v=bTF3tACqPRU)');
-			expect(sentText).toContain('Docs (https://docs.n8n.io/flow-logic/error-handling/)');
-			expect(sentText).toContain('Happy automating');
-			expect(sentText).toContain('The n8n team');
+			expect(sentText).toContain('チュートリアル (https://www.youtube.com/watch?v=bTF3tACqPRU)');
+			expect(sentText).toContain('ドキュメント (https://docs.n8n.io/flow-logic/error-handling/)');
+			expect(sentText).toContain('それでは、よい自動化を');
+			expect(sentText).toContain('n8n チーム');
 			expect(sentText).not.toMatch(/<[^>]+>/);
 		});
 	});

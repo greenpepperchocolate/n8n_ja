@@ -19,11 +19,21 @@ import type { RelayEventMap } from '@/events/maps/relay.event-map';
 import { UrlService } from '@/services/url.service';
 import { toError } from '@/utils';
 
-const REVOKED_AT_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+const REVOKED_AT_FORMATTER = new Intl.DateTimeFormat('ja-JP', {
 	day: 'numeric',
 	month: 'short',
 	year: 'numeric',
 });
+
+/** Stand-in for a recipient whose first name we don't have, so the greeting still reads naturally. */
+const FALLBACK_FIRST_NAME = 'ご担当者';
+
+/** Project roles arrive as bare slugs (`admin`, …) and are rendered straight into the email body. */
+const PROJECT_ROLE_LABELS: Record<string, string> = {
+	admin: '管理者',
+	editor: '編集者',
+	viewer: '閲覧者',
+};
 
 function formatRevokedAt(date: Date): string {
 	return REVOKED_AT_FORMATTER.format(date);
@@ -83,7 +93,7 @@ export class UserManagementMailer {
 		const template = await this.getTemplate('user-invited');
 		return await this.mailer.sendMail({
 			emailRecipients: inviteEmailData.email,
-			subject: 'You have been invited to n8n',
+			subject: 'n8n に招待されました',
 			body: template({ ...this.basePayload, ...inviteEmailData }),
 		});
 	}
@@ -94,7 +104,7 @@ export class UserManagementMailer {
 		const template = await this.getTemplate('password-reset-requested');
 		return await this.mailer.sendMail({
 			emailRecipients: passwordResetData.email,
-			subject: 'n8n password reset',
+			subject: 'n8n のパスワードリセット',
 			body: template({ ...this.basePayload, ...passwordResetData }),
 		});
 	}
@@ -113,11 +123,11 @@ export class UserManagementMailer {
 
 		return await this.mailer.sendMail({
 			emailRecipients: apiKey.user.email,
-			subject: 'Your n8n API key was revoked',
+			subject: 'n8n の API キーが失効しました',
 			body: template({
 				...this.basePayload,
 				email: apiKey.user.email,
-				firstName: apiKey.user.firstName ?? 'there',
+				firstName: apiKey.user.firstName ?? FALLBACK_FIRST_NAME,
 				label: apiKey.label,
 				suffix: apiKey.apiKey.slice(-4),
 				revokedBy: formatRevokedBy(revoker),
@@ -143,11 +153,11 @@ export class UserManagementMailer {
 
 		return await this.mailer.sendMail({
 			emailRecipients: owner.email,
-			subject: 'Your n8n MCP client access was revoked',
+			subject: 'n8n の MCP クライアントのアクセス権が失効しました',
 			body: template({
 				...this.basePayload,
 				email: owner.email,
-				firstName: owner.firstName ?? 'there',
+				firstName: owner.firstName ?? FALLBACK_FIRST_NAME,
 				clientName,
 				revokedBy: formatRevokedBy(revoker),
 				revokedAt: formatRevokedAt(new Date()),
@@ -170,10 +180,10 @@ export class UserManagementMailer {
 		const template = await this.getTemplate('workflow-failure');
 		return await this.mailer.sendMail({
 			emailRecipients: data.email,
-			subject: '⚠️ Your workflow failed. Get alerts next time',
+			subject: '⚠️ ワークフローが失敗しました。次回から通知を受け取りましょう',
 			body: template({
 				...this.basePayload,
-				firstName: data.firstName ?? 'there',
+				firstName: data.firstName ?? FALLBACK_FIRST_NAME,
 				workflowId: data.workflowId,
 				workflowName: data.workflowName,
 				workflowUrl,
@@ -262,7 +272,7 @@ export class UserManagementMailer {
 				workflowName: workflow.name,
 				workflowUrl: `${baseUrl}/workflow/${workflow.id}`,
 			}),
-			subjectBuilder: () => 'n8n has automatically autodeactivated a workflow',
+			subjectBuilder: () => 'n8n がワークフローを自動的に無効化しました',
 			messageType: 'Workflow auto-deactivated',
 		});
 	}
@@ -287,7 +297,7 @@ export class UserManagementMailer {
 				workflowName: workflow.name,
 				workflowUrl: `${baseUrl}/workflow/${workflow.id}`,
 			}),
-			subjectBuilder: () => `${sharer.firstName} has shared an n8n workflow with you`,
+			subjectBuilder: () => `${sharer.firstName} さんが n8n のワークフローを共有しました`,
 			messageType: 'Workflow shared',
 		});
 	}
@@ -312,7 +322,7 @@ export class UserManagementMailer {
 				credentialsName,
 				credentialsListUrl: `${baseUrl}/home/credentials`,
 			}),
-			subjectBuilder: () => `${sharer.firstName} has shared an n8n credential with you`,
+			subjectBuilder: () => `${sharer.firstName} さんが n8n の認証情報を共有しました`,
 			messageType: 'Credentials shared',
 		});
 	}
@@ -346,11 +356,11 @@ export class UserManagementMailer {
 			recipients: recipientsData,
 			sharer,
 			getTemplateData: (recipient) => ({
-				role: recipient.role,
+				role: PROJECT_ROLE_LABELS[recipient.role] ?? recipient.role,
 				projectName: project.name,
 				projectUrl: `${baseUrl}/projects/${project.id}`,
 			}),
-			subjectBuilder: () => `${sharer.firstName} has invited you to a project`,
+			subjectBuilder: () => `${sharer.firstName} さんがプロジェクトに招待しました`,
 			messageType: 'Project shared',
 		});
 	}

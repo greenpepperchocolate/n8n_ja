@@ -4,14 +4,14 @@
 		<mj-section padding="0 20px">
 			<mj-column>
 				<mj-include path="./_logo.mjml" />
-				<mj-text font-size="22px" font-weight="400">Your API key was revoked</mj-text>
+				<mj-text font-size="22px" font-weight="400">API キーが失効しました</mj-text>
 				<mj-text>
-					Your API key <b>"{{label}}"</b> (••••{{suffix}}) on <b>{{domain}}</b> was revoked by <b>{{revokedBy}}</b> on {{revokedAt}}.
+					<b>{{domain}}</b> の API キー <b>「{{label}}」</b>（••••{{suffix}}）が、{{revokedAt}} に <b>{{revokedBy}}</b> によって失効されました。
 				</mj-text>
 				<mj-text>
-					Any integrations or scripts still using this key have stopped working. If you still need API access, you can create a new key.
+					このキーを使用している連携やスクリプトは動作しなくなりました。引き続き API アクセスが必要な場合は、新しいキーを作成してください。
 				</mj-text>
-				<mj-button href="{{createApiKeyUrl}}">Create new API key</mj-button>
+				<mj-button href="{{createApiKeyUrl}}">新しい API キーを作成する</mj-button>
 				<mj-include path="./_footer.mjml" />
 			</mj-column>
 		</mj-section>
