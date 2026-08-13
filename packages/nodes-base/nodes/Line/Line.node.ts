@@ -12,6 +12,7 @@ import { notificationFields, notificationOperations } from './NotificationDescri
 
 export class Line implements INodeType {
 	description: INodeTypeDescription = {
+		hidden: true,
 		displayName: 'Line',
 		name: 'line',
 		// eslint-disable-next-line n8n-nodes-base/node-class-description-icon-not-svg

@@ -1,0 +1,116 @@
+{
+	"name": "LINE push message",
+	"nodes": [
+		{
+			"parameters": {},
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [-300, 160],
+			"id": "5c3a1f24-2f1a-4a6f-9a0a-6cb7b7e0f001",
+			"name": "When clicking 'Execute workflow'"
+		},
+		{
+			"parameters": {
+				"assignments": {
+					"assignments": [
+						{
+							"id": "0d0f3a2f-9a3f-4d0e-8f8a-1b2c3d4e5f01",
+							"name": "lineUserId",
+							"value": "U4af4980629b1d2f3e4c5b6a7",
+							"type": "string"
+						},
+						{
+							"id": "0d0f3a2f-9a3f-4d0e-8f8a-1b2c3d4e5f02",
+							"name": "name",
+							"value": "田中",
+							"type": "string"
+						},
+						{
+							"id": "0d0f3a2f-9a3f-4d0e-8f8a-1b2c3d4e5f03",
+							"name": "message",
+							"value": "本日はご来店ありがとうございました",
+							"type": "string"
+						}
+					]
+				},
+				"options": {}
+			},
+			"type": "n8n-nodes-base.set",
+			"typeVersion": 3.4,
+			"position": [-40, 160],
+			"id": "5c3a1f24-2f1a-4a6f-9a0a-6cb7b7e0f002",
+			"name": "Sheet Row"
+		},
+		{
+			"parameters": {
+				"resource": "message",
+				"operation": "push",
+				"to": "={{ $json.lineUserId }}",
+				"messageType": "text",
+				"text": "={{ $json.name }}様\n{{ $json.message }}",
+				"options": {}
+			},
+			"type": "n8n-nodes-base.lineMessaging",
+			"typeVersion": 1,
+			"position": [200, 160],
+			"id": "5c3a1f24-2f1a-4a6f-9a0a-6cb7b7e0f003",
+			"name": "LINE",
+			"credentials": {
+				"lineMessagingApi": {
+					"id": "1",
+					"name": "LINE Messaging account"
+				}
+			}
+		}
+	],
+	"pinData": {
+		"LINE": [
+			{
+				"json": {
+					"success": true,
+					"to": "U4af4980629b1d2f3e4c5b6a7",
+					"sentMessages": [
+						{
+							"id": "461230966842064897",
+							"quoteToken": "IStG5h1Tz7bIblmpuMbmpFgZL9YLUnAK2P0ovqRxTypMdE"
+						}
+					]
+				}
+			}
+		]
+	},
+	"connections": {
+		"When clicking 'Execute workflow'": {
+			"main": [
+				[
+					{
+						"node": "Sheet Row",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Sheet Row": {
+			"main": [
+				[
+					{
+						"node": "LINE",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"active": false,
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"versionId": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+	"id": "LineMessagingPushTest",
+	"meta": {
+		"instanceId": "be251a83c052a9862eeac953816fbb1464f89dfbf79d7ac490a8e336a8cc8bfd"
+	},
+	"tags": []
+}

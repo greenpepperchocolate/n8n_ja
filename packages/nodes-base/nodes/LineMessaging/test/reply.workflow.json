@@ -1,0 +1,104 @@
+{
+	"name": "LINE reply message",
+	"nodes": [
+		{
+			"parameters": {},
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [-300, 160],
+			"id": "9b1c2d3e-4f50-4162-8374-a5b6c7d8e001",
+			"name": "When clicking 'Execute workflow'"
+		},
+		{
+			"parameters": {
+				"assignments": {
+					"assignments": [
+						{
+							"id": "9b1c2d3e-4f50-4162-8374-a5b6c7d8e011",
+							"name": "replyToken",
+							"value": "0f3779fba3b349968c5d07db31eab56f",
+							"type": "string"
+						}
+					]
+				},
+				"options": {}
+			},
+			"type": "n8n-nodes-base.set",
+			"typeVersion": 3.4,
+			"position": [-40, 160],
+			"id": "9b1c2d3e-4f50-4162-8374-a5b6c7d8e002",
+			"name": "Webhook Event"
+		},
+		{
+			"parameters": {
+				"resource": "message",
+				"operation": "reply",
+				"replyToken": "={{ $json.replyToken }}",
+				"messageType": "text",
+				"text": "お問い合わせありがとうございます",
+				"options": {
+					"notificationDisabled": true
+				}
+			},
+			"type": "n8n-nodes-base.lineMessaging",
+			"typeVersion": 1,
+			"position": [200, 160],
+			"id": "9b1c2d3e-4f50-4162-8374-a5b6c7d8e003",
+			"name": "LINE",
+			"credentials": {
+				"lineMessagingApi": {
+					"id": "1",
+					"name": "LINE Messaging account"
+				}
+			}
+		}
+	],
+	"pinData": {
+		"LINE": [
+			{
+				"json": {
+					"success": true,
+					"sentMessages": [
+						{
+							"id": "461230966842064898"
+						}
+					]
+				}
+			}
+		]
+	},
+	"connections": {
+		"When clicking 'Execute workflow'": {
+			"main": [
+				[
+					{
+						"node": "Webhook Event",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Webhook Event": {
+			"main": [
+				[
+					{
+						"node": "LINE",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"active": false,
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"versionId": "1a2b3c4d-5e6f-4708-8192-a3b4c5d6e7f8",
+	"id": "LineMessagingReplyTest",
+	"meta": {
+		"instanceId": "be251a83c052a9862eeac953816fbb1464f89dfbf79d7ac490a8e336a8cc8bfd"
+	},
+	"tags": []
+}

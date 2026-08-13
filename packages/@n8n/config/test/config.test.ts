@@ -57,7 +57,7 @@ describe('GlobalConfig', () => {
 			},
 			oauthBrowserBinding: false,
 		},
-		defaultLocale: 'en',
+		defaultLocale: 'ja',
 		hideUsagePage: false,
 		deployment: {
 			type: 'default',
