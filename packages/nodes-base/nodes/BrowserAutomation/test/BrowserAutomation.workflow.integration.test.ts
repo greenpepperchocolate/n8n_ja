@@ -21,6 +21,7 @@ describe('Browser Automation workflow integration', () => {
 						typeVersion: 1,
 						position: [0, 0],
 						parameters: {
+							headless: true,
 							browserSettings: {
 								allowPrivateNetwork: true,
 								navigationTimeout: 3000,
@@ -54,6 +55,15 @@ describe('Browser Automation workflow integration', () => {
 										frameType: 'none',
 										outputVariableName: 'registrationResult',
 									},
+									{
+										operation: 'getText',
+										locatorType: 'css',
+										locatorValue: '.list-item',
+										frameType: 'none',
+										textExtractionMode: 'allVisible',
+										maximumTextResults: 100,
+										outputVariableName: 'items',
+									},
 								],
 							},
 							errorBehavior: 'output',
@@ -79,6 +89,7 @@ describe('Browser Automation workflow integration', () => {
 								url: '',
 								name: '山田太郎',
 								registrationResult: '山田太郎-登録済み',
+								items: ['項目1', '項目2'],
 								success: true,
 							},
 						},
@@ -91,7 +102,8 @@ describe('Browser Automation workflow integration', () => {
 	beforeAll(async () => {
 		server = createServer((_request, response) => {
 			response.setHeader('Content-Type', 'text/html; charset=utf-8');
-			response.end(`<!doctype html><label>氏名 <input></label><button>登録</button><div id="result"></div><script>
+			response.end(`<!doctype html><label>氏名 <input></label><button>登録</button><div id="result"></div>
+				<ul><li class="list-item">項目1</li><li class="list-item" style="display:none">非表示</li><li class="list-item">項目2</li></ul><script>
 				document.querySelector('button').addEventListener('click', () => {
 					document.querySelector('#result').textContent = document.querySelector('input').value + '-登録済み';
 				});

@@ -1,12 +1,14 @@
-import type { IExecuteFunctions, INode } from 'n8n-workflow';
+import type { IExecuteFunctions, INode, INodePropertyOptions } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
 import type { Mock } from 'vitest';
 import { mock, mockDeep } from 'vitest-mock-extended';
 
 import * as broadcast from '../actions/message/broadcast.operation';
+import { description as messageDescription } from '../actions/message';
 import * as multicast from '../actions/message/multicast.operation';
 import * as push from '../actions/message/push.operation';
 import * as reply from '../actions/message/reply.operation';
+import { router } from '../actions/router';
 import * as getProfile from '../actions/user/getProfile.operation';
 
 const node = mock<INode>({
@@ -46,6 +48,129 @@ function retryKeysOf(request: Mock): string[] {
 }
 
 describe('LINE node operations', () => {
+	it('shows a monthly quota error and stops sending remaining items without retrying', async () => {
+		const { context, request } = createExecuteFunctions({
+			resource: 'message',
+			operation: 'push',
+			to: 'U1',
+			messageType: 'text',
+			text: 'hello',
+			options: {},
+		});
+		context.getInputData.mockReturnValue([
+			{ json: { id: 1 } },
+			{ json: { id: 2 } },
+			{ json: { id: 3 } },
+		]);
+		request.mockRejectedValue(
+			Object.assign(new Error('Request failed with status code 429'), {
+				httpCode: '429',
+				context: { data: { message: 'You have reached your monthly limit.' } },
+			}),
+		);
+
+		const [output] = await router.call(context);
+
+		expect(request).toHaveBeenCalledTimes(1);
+		expect(output).toHaveLength(3);
+		expect(output.map((item) => item.pairedItem)).toEqual([{ item: 0 }, { item: 1 }, { item: 2 }]);
+		expect(output[0].json).toMatchObject({
+			success: false,
+			lineError: {
+				type: 'MONTHLY_QUOTA_EXCEEDED',
+				httpCode: 429,
+				retryable: false,
+			},
+		});
+		expect(output[0].json).not.toHaveProperty('error');
+		expect(context.addExecutionHints).toHaveBeenCalledWith(
+			expect.objectContaining({ type: 'danger', location: 'outputPane' }),
+		);
+	});
+
+	it('checks the current quota when a 429 response does not identify the cause', async () => {
+		const { context, request } = createExecuteFunctions({
+			resource: 'message',
+			operation: 'push',
+			to: 'U1',
+			messageType: 'text',
+			text: 'hello',
+			options: {},
+		});
+		context.getInputData.mockReturnValue([{ json: {} }]);
+		request
+			.mockRejectedValueOnce(
+				Object.assign(new Error('Request failed with status code 429'), {
+					httpCode: '429',
+					context: { data: { message: 'Too many requests' } },
+				}),
+			)
+			.mockResolvedValueOnce({ type: 'limited', value: 200 })
+			.mockResolvedValueOnce({ totalUsage: 200 });
+
+		const [output] = await router.call(context);
+
+		expect(request).toHaveBeenCalledTimes(3);
+		expect(request.mock.calls.map((call) => call[1].url)).toEqual([
+			'https://api.line.me/v2/bot/message/push',
+			'https://api.line.me/v2/bot/message/quota',
+			'https://api.line.me/v2/bot/message/quota/consumption',
+		]);
+		expect(output[0].json).toMatchObject({
+			success: false,
+			lineError: { type: 'MONTHLY_QUOTA_EXCEEDED', retryable: false },
+		});
+	});
+
+	it('keeps a temporary 429 retryable when the monthly quota remains', async () => {
+		const { context, request } = createExecuteFunctions({
+			resource: 'message',
+			operation: 'push',
+			to: 'U1',
+			messageType: 'text',
+			text: 'hello',
+			options: {},
+		});
+		context.getInputData.mockReturnValue([{ json: {} }]);
+		request
+			.mockRejectedValueOnce(
+				Object.assign(new Error('Request failed with status code 429'), {
+					httpCode: '429',
+					context: { data: { message: 'Too many requests' } },
+				}),
+			)
+			.mockResolvedValueOnce({ type: 'limited', value: 200 })
+			.mockResolvedValueOnce({ totalUsage: 120 });
+
+		await expect(router.call(context)).rejects.toThrow('LINE rate limit reached');
+		expect(request).toHaveBeenCalledTimes(3);
+		expect(context.addExecutionHints).not.toHaveBeenCalled();
+	});
+
+	it('explains the recipient scope in the operation picker and selected operation', () => {
+		const operation = messageDescription.find((property) => property.name === 'operation');
+		const options = operation?.options as INodePropertyOptions[];
+
+		expect(options.find((option) => option.value === 'broadcast')).toMatchObject({
+			action: 'Broadcast a message（友だち全員へ一斉配信）',
+			description: expect.stringContaining('すべての対象ユーザー'),
+		});
+		expect(options.find((option) => option.value === 'multicast')).toMatchObject({
+			action: 'Multicast a message（指定した複数ユーザーへ送信）',
+			description: expect.stringContaining('指定した複数のユーザー'),
+		});
+		expect(options.find((option) => option.value === 'push')).toMatchObject({
+			action: 'Push a message（1人・グループ・トークルームへ送信）',
+			description: expect.stringContaining('指定した1人、グループ、またはトークルーム'),
+		});
+		expect(options.find((option) => option.value === 'reply')).toMatchObject({
+			action: 'Reply to a message（受信イベントへ返信）',
+		});
+		expect(broadcast.description[0].displayName).toContain('宛先を指定せず');
+		expect(multicast.description[0].displayName).toContain('複数のUser ID');
+		expect(push.description[0].displayName).toContain('1つのUser ID');
+	});
+
 	describe('Push', () => {
 		it('builds a push request from the node parameters', async () => {
 			const { context, request } = createExecuteFunctions(

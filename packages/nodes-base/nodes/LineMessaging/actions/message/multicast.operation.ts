@@ -18,6 +18,13 @@ import { updateDisplayOptions } from '../../../../utils/utilities';
 
 const properties: INodeProperties[] = [
 	{
+		displayName:
+			'複数のUser IDを指定して、同じメッセージを送信します。Group IDとRoom IDは使用できません。',
+		name: 'multicastNotice',
+		type: 'notice',
+		default: '',
+	},
+	{
 		displayName: 'To',
 		name: 'to',
 		type: 'string',

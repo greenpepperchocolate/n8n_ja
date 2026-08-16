@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { createTestingPinia } from '@pinia/testing';
 import ButtonParameter, { type Props } from './ButtonParameter.vue';
 import { useNDVStore, injectNDVStore } from '@/features/ndv/shared/ndv.store';
@@ -10,15 +10,35 @@ import { useRootStore } from '@n8n/stores/useRootStore';
 import { useToast } from '@n8n/composables/useToast';
 import type { INodeProperties } from 'n8n-workflow';
 
+const nodeActionMocks = vi.hoisted(() => ({
+	resolveRequiredParameters: vi.fn(),
+	getNodeParameterActionResult: vi.fn(),
+}));
+
 vi.mock('@/features/ndv/shared/ndv.store');
 vi.mock('@/app/stores/workflows.store');
 vi.mock('@/app/stores/posthog.store');
 vi.mock('@n8n/stores/useRootStore');
 vi.mock('@/features/ai/assistant/assistant.api');
+vi.mock('@/app/composables/useWorkflowHelpers', () => ({
+	useWorkflowHelpers: () => ({
+		resolveRequiredParameters: nodeActionMocks.resolveRequiredParameters,
+	}),
+}));
+vi.mock('@/app/stores/nodeTypes.store', () => ({
+	useNodeTypesStore: () => ({
+		getNodeParameterActionResult: nodeActionMocks.getNodeParameterActionResult,
+	}),
+}));
+vi.mock('@/features/collaboration/projects/projects.store', () => ({
+	useProjectsStore: () => ({ currentProjectId: 'test-project-id' }),
+}));
 vi.mock('@/app/stores/workflowDocument.store', async () => {
 	const actual = await vi.importActual('@/app/stores/workflowDocument.store');
 	const { shallowRef } = await import('vue');
 	const mockStore = {
+		documentId: 'test-document-id',
+		workflowId: 'test-workflow-id',
 		getParentNodesByDepth: vi.fn().mockReturnValue([]),
 		getNodeByName: vi.fn().mockReturnValue(null),
 	};
@@ -80,9 +100,19 @@ describe('ButtonParameter', () => {
 	};
 
 	beforeEach(() => {
+		nodeActionMocks.resolveRequiredParameters.mockImplementation((_parameter, parameters) =>
+			Promise.resolve(parameters),
+		);
+		nodeActionMocks.getNodeParameterActionResult.mockResolvedValue({});
+
 		vi.mocked(useNDVStore).mockReturnValue({
 			ndvInputData: [{}],
-			activeNode: { name: 'TestNode', parameters: {} },
+			activeNode: {
+				name: 'TestNode',
+				type: 'test.node',
+				typeVersion: 1,
+				parameters: {},
+			},
 			isDraggableDragging: false,
 		} as any);
 
@@ -90,7 +120,12 @@ describe('ButtonParameter', () => {
 			value: {
 				ndvInputData: [{}],
 				ndvInputDataWithPinnedData: [{}],
-				activeNode: { name: 'TestNode', parameters: {} },
+				activeNode: {
+					name: 'TestNode',
+					type: 'test.node',
+					typeVersion: 1,
+					parameters: {},
+				},
 				isDraggableDragging: false,
 				pushRef: 'testPushRef',
 			},
@@ -177,5 +212,92 @@ describe('ButtonParameter', () => {
 		const wrapper = mountComponent({ isReadOnly: true });
 		expect(wrapper.find('textarea').attributes('disabled')).toBeDefined();
 		expect(wrapper.find('button').attributes('disabled')).toBeDefined();
+	});
+
+	it('does not update parameters when a node action returns an empty result', async () => {
+		const wrapper = mountComponent({
+			parameter: {
+				name: 'elementPicker',
+				displayName: 'Pick element',
+				type: 'button',
+				default: '',
+				typeOptions: {
+					buttonConfig: {
+						label: 'Pick',
+						action: {
+							type: 'invokeNodeAction',
+							handler: 'pickElement',
+							targets: { locatorType: 'locatorType' },
+						},
+					},
+				},
+			} as INodeProperties,
+			path: 'steps.step[0]',
+		});
+
+		await wrapper.find('button').trigger('click');
+		await flushPromises();
+
+		expect(nodeActionMocks.getNodeParameterActionResult).toHaveBeenCalledOnce();
+		expect(wrapper.emitted('valueChanged')).toBeUndefined();
+		expect(useToast().showMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+	});
+
+	it('runs a node action without input data and applies its parameter targets', async () => {
+		vi.mocked(injectNDVStore).mockReturnValue({
+			value: {
+				ndvInputData: [],
+				ndvInputDataWithPinnedData: [],
+				activeNode: {
+					name: 'TestNode',
+					type: 'test.node',
+					typeVersion: 1,
+					parameters: {},
+				},
+				isDraggableDragging: false,
+				pushRef: 'testPushRef',
+			},
+		} as any);
+		nodeActionMocks.getNodeParameterActionResult.mockResolvedValue({
+			locatorType: 'role',
+			locatorRole: 'heading',
+			locatorName: 'Customer name',
+		});
+
+		const wrapper = mountComponent({
+			parameter: {
+				name: 'elementPicker',
+				displayName: 'Pick element',
+				type: 'button',
+				default: '',
+				typeOptions: {
+					buttonConfig: {
+						label: 'Pick',
+						action: {
+							type: 'invokeNodeAction',
+							handler: 'pickElement',
+							targets: {
+								locatorType: 'locatorType',
+								locatorRole: 'locatorRole',
+								locatorName: 'locatorName',
+							},
+						},
+					},
+				},
+			} as INodeProperties,
+			path: 'steps.step[4]',
+		});
+
+		const button = wrapper.find('button');
+		expect(button.attributes('disabled')).toBeUndefined();
+
+		await button.trigger('click');
+		await flushPromises();
+
+		expect(wrapper.emitted('valueChanged')).toEqual([
+			[{ name: 'steps.step[4].locatorType', value: 'role' }],
+			[{ name: 'steps.step[4].locatorRole', value: 'heading' }],
+			[{ name: 'steps.step[4].locatorName', value: 'Customer name' }],
+		]);
 	});
 });

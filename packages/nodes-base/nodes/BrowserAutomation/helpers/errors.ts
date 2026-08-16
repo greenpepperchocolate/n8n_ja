@@ -3,7 +3,10 @@ import type { Page } from 'playwright-core';
 import type {
 	BrowserErrorOutput,
 	BrowserErrorType,
+	BrowserFrameDefinition,
+	BrowserFrameType,
 	BrowserLocatorDefinition,
+	BrowserPickerLocatorVariants,
 	BrowserStep,
 	BrowserStepOperation,
 } from '../types';
@@ -25,6 +28,9 @@ const ERROR_MESSAGES: Record<BrowserErrorType, string> = {
 	POPUP_TIMEOUT: 'ポップアップの待機がタイムアウトしました。',
 	UPLOAD_FAILED: 'ファイルのアップロードに失敗しました。',
 	SCREENSHOT_FAILED: 'スクリーンショットの取得に失敗しました。',
+	SCROLL_FAILED: '画面をスクロールできませんでした。',
+	SCROLL_LIMIT_REACHED:
+		'最大スクロール回数に達しました。追加データがまだ読み込まれている可能性があります。',
 	BROWSER_LAUNCH_FAILED: 'ブラウザを起動できませんでした。',
 	BROWSER_CRASHED: 'ブラウザとの接続が失われました。',
 	NETWORK_ERROR: 'ネットワークエラーが発生しました。',
@@ -33,6 +39,33 @@ const ERROR_MESSAGES: Record<BrowserErrorType, string> = {
 	INVALID_INPUT: '入力値が正しくありません。',
 	UNKNOWN_ERROR: 'ブラウザ操作に失敗しました。',
 };
+
+const OPERATION_NAMES: Record<BrowserStepOperation, string> = {
+	openUrl: 'ページを開く',
+	fill: '文字を入力',
+	click: 'ボタンなどをクリック',
+	selectOption: 'プルダウンを選択',
+	check: 'チェックを入れる',
+	uncheck: 'チェックを外す',
+	wait: '指定した状態まで待つ',
+	getText: '画面の文字を取得',
+	getAttribute: 'リンクを取得',
+	uploadFile: 'ファイルをアップロード',
+	screenshot: '画面を画像で保存',
+	scroll: '画面をスクロール',
+};
+
+export function browserStepOperationName(operation: BrowserStepOperation): string {
+	return OPERATION_NAMES[operation];
+}
+
+export function browserStepFailureMessage(options: {
+	stepIndex: number;
+	operation: BrowserStepOperation;
+	reason: string;
+}): string {
+	return `操作${options.stepIndex + 1}（${browserStepOperationName(options.operation)}）でエラーが発生しました。原因：${options.reason}`;
+}
 
 export class BrowserStepError extends Error {
 	constructor(
@@ -51,7 +84,13 @@ export class BrowserStepFailure extends Error {
 		readonly step: BrowserStep,
 		readonly stepIndex: number,
 	) {
-		super(error.message);
+		super(
+			browserStepFailureMessage({
+				stepIndex,
+				operation: step.operation,
+				reason: error.message,
+			}),
+		);
 		this.name = 'BrowserStepFailure';
 	}
 }
@@ -111,6 +150,7 @@ export function classifyBrowserError(
 	}
 	if (operation === 'uploadFile') return new BrowserStepError('UPLOAD_FAILED');
 	if (operation === 'screenshot') return new BrowserStepError('SCREENSHOT_FAILED');
+	if (operation === 'scroll') return new BrowserStepError('SCROLL_FAILED');
 	if (operation === 'click') return new BrowserStepError('ELEMENT_NOT_CLICKABLE');
 	if (operation === 'fill') return new BrowserStepError('FILL_NOT_SUPPORTED');
 	return new BrowserStepError('UNKNOWN_ERROR');
@@ -143,19 +183,107 @@ export function sanitizeUrl(value: string): string {
 	}
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFrameType(value: unknown): value is Exclude<BrowserFrameType, 'none'> {
+	return value === 'name' || value === 'url' || value === 'css';
+}
+
+export function framePathFromStep(step: BrowserStep): BrowserFrameDefinition[] {
+	const path = step.iframePath;
+	if (isRecord(path) && Array.isArray(path.iframe)) {
+		return path.iframe.flatMap((entry) => {
+			if (!isRecord(entry) || !isFrameType(entry.frameType)) return [];
+			return [
+				{
+					type: entry.frameType,
+					value: typeof entry.frameValue === 'string' ? entry.frameValue : undefined,
+				},
+			];
+		});
+	}
+	return [];
+}
+
+function locatorVariant(value: unknown): BrowserLocatorDefinition | undefined {
+	if (!isRecord(value)) return undefined;
+	const type = value.type;
+	if (
+		type !== 'role' &&
+		type !== 'label' &&
+		type !== 'placeholder' &&
+		type !== 'text' &&
+		type !== 'testId' &&
+		type !== 'css' &&
+		type !== 'xpath'
+	) {
+		return undefined;
+	}
+	return {
+		type,
+		value: typeof value.value === 'string' ? value.value : undefined,
+		role: typeof value.role === 'string' ? value.role : undefined,
+		name: typeof value.name === 'string' ? value.name : undefined,
+	};
+}
+
+function pickerLocatorVariants(step: BrowserStep): BrowserPickerLocatorVariants | undefined {
+	if (
+		(step.operation !== 'getText' && step.operation !== 'getAttribute') ||
+		typeof step.pickerLocatorVariants !== 'string' ||
+		step.pickerLocatorVariants.length > 5000
+	) {
+		return undefined;
+	}
+	try {
+		const value: unknown = JSON.parse(step.pickerLocatorVariants);
+		if (!isRecord(value)) return undefined;
+		const single = locatorVariant(value.single);
+		const allVisible = locatorVariant(value.allVisible);
+		return single && allVisible ? { single, allVisible } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isSameLocator(left: BrowserLocatorDefinition, right: BrowserLocatorDefinition): boolean {
+	return (
+		left.type === right.type &&
+		(left.value ?? '') === (right.value ?? '') &&
+		(left.role ?? '') === (right.role ?? '') &&
+		(left.name ?? '') === (right.name ?? '')
+	);
+}
+
 export function locatorFromStep(step: BrowserStep): BrowserLocatorDefinition | undefined {
 	if (!step.locatorType) return undefined;
-	return {
+	const frames = framePathFromStep(step);
+	const configured: BrowserLocatorDefinition = {
 		type: step.locatorType,
 		value: step.locatorType === 'role' ? undefined : step.locatorValue,
 		role: step.locatorType === 'role' ? step.locatorRole : undefined,
 		name: step.locatorType === 'role' ? step.locatorName : undefined,
-		frame: step.frameType
-			? {
-					type: step.frameType,
-					value: step.frameValue,
-				}
-			: undefined,
+	};
+	const variants = pickerLocatorVariants(step);
+	let selected = configured;
+	if (
+		variants &&
+		(isSameLocator(configured, variants.single) || isSameLocator(configured, variants.allVisible))
+	) {
+		selected = step.textExtractionMode === 'allVisible' ? variants.allVisible : variants.single;
+	}
+	return {
+		...selected,
+		frames: frames.length > 0 ? frames : undefined,
+		frame:
+			frames.length === 0 && step.frameType
+				? {
+						type: step.frameType,
+						value: step.frameValue,
+					}
+				: undefined,
 	};
 }
 
@@ -171,6 +299,17 @@ function sanitizedLocator(step: BrowserStep) {
 }
 
 function sanitizedFrame(step: BrowserStep) {
+	const frames = framePathFromStep(step);
+	if (frames.length > 0) {
+		return {
+			type: 'nested',
+			path: frames.map((frame, index) => ({
+				level: index + 1,
+				type: frame.type,
+				value: sanitizeText(frame.value),
+			})),
+		};
+	}
 	return {
 		type: step.frameType ?? 'none',
 		value: sanitizeText(step.frameValue),
@@ -185,6 +324,7 @@ export function createBrowserErrorOutput(options: {
 		type: options.failure.error.type,
 		step: options.failure.stepIndex + 1,
 		operation: options.failure.step.operation,
+		operationName: browserStepOperationName(options.failure.step.operation),
 		message: options.failure.error.message,
 		url: sanitizeUrl(options.page?.url() ?? ''),
 		locator: sanitizedLocator(options.failure.step),

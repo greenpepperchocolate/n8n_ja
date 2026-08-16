@@ -1,8 +1,26 @@
 import { createHash } from 'crypto';
 import type { IDataObject, IExecuteFunctions } from 'n8n-workflow';
 
-import { getStatusCode } from './errors';
+import { getLineErrorBody, getStatusCode, LineMonthlyQuotaExceededError } from './errors';
 import { lineApiRequest } from '../transport';
+
+async function isMonthlyMessageQuotaExhausted(this: IExecuteFunctions): Promise<boolean> {
+	try {
+		const [quota, consumption] = await Promise.all([
+			lineApiRequest.call(this, 'GET', '/v2/bot/message/quota'),
+			lineApiRequest.call(this, 'GET', '/v2/bot/message/quota/consumption'),
+		]);
+
+		return (
+			quota.type === 'limited' &&
+			typeof quota.value === 'number' &&
+			typeof consumption.totalUsage === 'number' &&
+			consumption.totalUsage >= quota.value
+		);
+	} catch {
+		return false;
+	}
+}
 
 /**
  * Builds the value of `X-Line-Retry-Key`.
@@ -74,6 +92,18 @@ export async function sendMessageRequest(
 	} catch (error) {
 		if (getStatusCode(error) === '409') {
 			return { alreadyAccepted: true };
+		}
+
+		if (
+			getStatusCode(error) === '429' &&
+			!(error instanceof LineMonthlyQuotaExceededError) &&
+			(await isMonthlyMessageQuotaExhausted.call(this))
+		) {
+			throw new LineMonthlyQuotaExceededError(
+				this.getNode(),
+				getLineErrorBody(error) ?? {},
+				itemIndex,
+			);
 		}
 
 		throw error;

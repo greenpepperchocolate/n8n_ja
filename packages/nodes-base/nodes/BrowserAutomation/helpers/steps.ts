@@ -1,9 +1,10 @@
 import type { IExecuteFunctions } from 'n8n-workflow';
 import { ManualExecutionCancelledError } from 'n8n-workflow';
-import type { Page } from 'playwright-core';
+import type { Locator, Page } from 'playwright-core';
 
 import type {
 	BrowserItemResult,
+	BrowserLocatorDefinition,
 	BrowserSettings,
 	BrowserStep,
 	BrowserStepOperation,
@@ -17,6 +18,7 @@ import {
 	sanitizeUrl,
 } from './errors';
 import { assertSingleElement, resolveLocator } from './locator';
+import { executeScroll } from './scroll';
 import type { BrowserRequestPolicy } from './security';
 import { assertNavigationUrlAllowed } from './security';
 
@@ -32,10 +34,23 @@ const OPERATIONS = new Set<BrowserStepOperation>([
 	'getAttribute',
 	'uploadFile',
 	'screenshot',
+	'scroll',
 ]);
 
 type WaitUntil = 'load' | 'domcontentloaded' | 'networkidle';
 type ScreenshotFormat = 'png' | 'jpeg';
+type BrowserStepExecutionContext = Pick<IExecuteFunctions, 'helpers'>;
+
+interface RunBrowserStepsOptions {
+	page: Page;
+	steps: BrowserStep[];
+	itemIndex: number;
+	settings: BrowserSettings;
+	result: BrowserItemResult;
+	requestPolicy: BrowserRequestPolicy;
+	abortSignal?: AbortSignal;
+	browserDisconnected: () => boolean;
+}
 
 function waitUntilValue(value: string): WaitUntil {
 	if (value === 'load' || value === 'domcontentloaded' || value === 'networkidle') return value;
@@ -82,6 +97,80 @@ function validateBinaryFieldName(value: string): string {
 	return value;
 }
 
+function maximumTextResults(step: BrowserStep): number {
+	const maximum = numberValue(step, 'maximumTextResults', 100);
+	if (!Number.isInteger(maximum) || maximum < 1 || maximum > 1000) {
+		throw new BrowserStepError(
+			'INVALID_INPUT',
+			'最大取得件数は1から1,000までの整数で指定してください。',
+		);
+	}
+	return maximum;
+}
+
+function extractsAllVisibleValues(step: BrowserStep): boolean {
+	const mode = stringValue(step, 'textExtractionMode', 'single');
+	if (mode !== 'single' && mode !== 'allVisible') {
+		throw new BrowserStepError('INVALID_INPUT', '取得する範囲を選択してください。');
+	}
+	return mode === 'allVisible';
+}
+
+async function visibleTexts(locator: Locator, maximum: number) {
+	await locator
+		.first()
+		.waitFor({ state: 'attached' })
+		.catch(() => undefined);
+	const count = await locator.count();
+	if (count === 0) throw new BrowserStepError('ELEMENT_NOT_FOUND');
+
+	const values: string[] = [];
+	let visibleCount = 0;
+	for (let index = 0; index < count && values.length < maximum; index++) {
+		const item = locator.nth(index);
+		if (!(await item.isVisible())) continue;
+		visibleCount++;
+		const text = (await item.innerText()).trim();
+		if (text) values.push(text);
+	}
+
+	if (visibleCount === 0) throw new BrowserStepError('ELEMENT_NOT_VISIBLE');
+	return values;
+}
+
+async function resolvedLinkUrl(locator: Locator): Promise<string | null> {
+	return await locator.evaluate((element) => {
+		const href = element.getAttribute('href');
+		if (href === null) return null;
+		try {
+			return new URL(href, element.ownerDocument.baseURI).href;
+		} catch {
+			return null;
+		}
+	});
+}
+
+async function visibleLinkUrls(locator: Locator, maximum: number) {
+	await locator
+		.first()
+		.waitFor({ state: 'attached' })
+		.catch(() => undefined);
+	const count = await locator.count();
+	if (count === 0) throw new BrowserStepError('ELEMENT_NOT_FOUND');
+
+	const values: string[] = [];
+	let visibleCount = 0;
+	for (let index = 0; index < count && values.length < maximum; index++) {
+		const item = locator.nth(index);
+		if (!(await item.isVisible())) continue;
+		visibleCount++;
+		const value = await resolvedLinkUrl(item);
+		if (value !== null) values.push(value);
+	}
+	if (visibleCount === 0) throw new BrowserStepError('ELEMENT_NOT_VISIBLE');
+	return values;
+}
+
 async function abortableDelay(delay: number, signal?: AbortSignal): Promise<void> {
 	return await new Promise((resolve, reject) => {
 		if (signal?.aborted) {
@@ -105,12 +194,22 @@ function debugLocator(step: BrowserStep) {
 		role: locator.role ?? '',
 		value: locator.value?.slice(0, 200) ?? '',
 		name: locator.name?.slice(0, 200) ?? '',
-		frameType: locator.frame?.type ?? 'none',
+		iframeLevels:
+			locator.frames?.length ??
+			(locator.frame?.type !== undefined && locator.frame.type !== 'none' ? 1 : 0),
+		iframeTypes: locator.frames?.map((frame) => frame.type) ?? [locator.frame?.type ?? 'none'],
 	};
 }
 
+function hasFrameScope(definition: BrowserLocatorDefinition): boolean {
+	return (
+		Boolean(definition.frames?.length) ||
+		(definition.frame?.type !== undefined && definition.frame.type !== 'none')
+	);
+}
+
 async function executeWait(page: Page, step: BrowserStep): Promise<void> {
-	const waitType = stringValue(step, 'waitType', 'elementVisible');
+	const waitType = stringValue(step, 'waitType', 'time');
 	const timeout = numberValue(step, 'waitTimeout', 30000);
 
 	if (waitType === 'time') {
@@ -144,7 +243,7 @@ async function executeWait(page: Page, step: BrowserStep): Promise<void> {
 }
 
 async function executeStep(
-	this: IExecuteFunctions,
+	executionContext: BrowserStepExecutionContext | undefined,
 	options: {
 		page: Page;
 		step: BrowserStep;
@@ -152,9 +251,10 @@ async function executeStep(
 		settings: BrowserSettings;
 		result: BrowserItemResult;
 		requestPolicy: BrowserRequestPolicy;
+		abortSignal?: AbortSignal;
 	},
 ): Promise<void> {
-	const { page, step, itemIndex, settings, result, requestPolicy } = options;
+	const { page, step, itemIndex, settings, result, requestPolicy, abortSignal } = options;
 	const operation = step.operation;
 	if (!OPERATIONS.has(operation)) throw new BrowserStepError('INVALID_INPUT');
 	requestPolicy.clearBlockedRequest();
@@ -172,7 +272,13 @@ async function executeStep(
 		return;
 	}
 
+	if (operation === 'scroll') {
+		await executeScroll(page, step, abortSignal);
+		return;
+	}
+
 	if (operation === 'screenshot') {
+		if (!executionContext) throw new BrowserStepError('INVALID_INPUT');
 		const target = stringValue(step, 'screenshotTarget', 'viewport');
 		const format = screenshotFormatValue(stringValue(step, 'imageFormat', 'png'));
 		let buffer: Buffer;
@@ -180,7 +286,7 @@ async function executeStep(
 			const definition = locatorFromStep(step);
 			if (!definition) throw new BrowserStepError('INVALID_LOCATOR');
 			const locator = await resolveLocator(page, definition);
-			const frameScoped = definition.frame?.type !== undefined && definition.frame.type !== 'none';
+			const frameScoped = hasFrameScope(definition);
 			await assertSingleElement(locator, { frameScoped, requireVisible: true });
 			buffer = await locator.screenshot({
 				type: format,
@@ -198,7 +304,7 @@ async function executeStep(
 		);
 		const extension = format === 'jpeg' ? 'jpg' : 'png';
 		const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
-		const binary = await this.helpers.prepareBinaryData(
+		const binary = await executionContext.helpers.prepareBinaryData(
 			buffer,
 			`browser-screenshot-${Date.now()}.${extension}`,
 			mimeType,
@@ -210,15 +316,19 @@ async function executeStep(
 	const definition = locatorFromStep(step);
 	if (!definition) throw new BrowserStepError('INVALID_LOCATOR');
 	const locator = await resolveLocator(page, definition);
-	const frameScoped = definition.frame?.type !== undefined && definition.frame.type !== 'none';
+	const frameScoped = hasFrameScope(definition);
+	const shouldExtractAllVisibleValues =
+		(operation === 'getText' || operation === 'getAttribute') && extractsAllVisibleValues(step);
 
-	await assertSingleElement(locator, {
-		frameScoped,
-		requireVisible: true,
-		requireEnabled: ['fill', 'click', 'selectOption', 'check', 'uncheck', 'uploadFile'].includes(
-			operation,
-		),
-	});
+	if (!shouldExtractAllVisibleValues) {
+		await assertSingleElement(locator, {
+			frameScoped,
+			requireVisible: true,
+			requireEnabled: ['fill', 'click', 'selectOption', 'check', 'uncheck', 'uploadFile'].includes(
+				operation,
+			),
+		});
+	}
 
 	switch (operation) {
 		case 'fill':
@@ -240,7 +350,7 @@ async function executeStep(
 			return;
 		}
 		case 'selectOption': {
-			const selectBy = stringValue(step, 'selectBy', 'value');
+			const selectBy = stringValue(step, 'selectBy', 'label');
 			if (selectBy === 'index') {
 				await locator.selectOption({ index: numberValue(step, 'selectIndex', 0) });
 			} else if (selectBy === 'label') {
@@ -263,7 +373,9 @@ async function executeStep(
 				stringValue(step, 'outputVariableName'),
 				'Output Variable Name',
 			);
-			result.json[outputName] = await locator.innerText();
+			result.json[outputName] = shouldExtractAllVisibleValues
+				? await visibleTexts(locator, maximumTextResults(step))
+				: await locator.innerText();
 			return;
 		}
 		case 'getAttribute': {
@@ -271,15 +383,32 @@ async function executeStep(
 				stringValue(step, 'outputVariableName'),
 				'Output Variable Name',
 			);
-			result.json[outputName] = await locator.getAttribute(stringValue(step, 'attributeName'));
+			if (shouldExtractAllVisibleValues) {
+				result.json[outputName] = await visibleLinkUrls(locator, maximumTextResults(step));
+				return;
+			}
+			const url = await resolvedLinkUrl(locator);
+			if (url === null) {
+				throw new BrowserStepError(
+					'INVALID_INPUT',
+					'選択した場所にリンクがありません。リンクを選択してください。',
+				);
+			}
+			result.json[outputName] = url;
 			return;
 		}
 		case 'uploadFile': {
+			if (!executionContext) {
+				throw new BrowserStepError(
+					'INVALID_INPUT',
+					'要素選択では、それより前の「ファイルをアップロード」操作を自動再現できません。選択用ブラウザで手動操作してください。',
+				);
+			}
 			const propertyName = validateBinaryFieldName(
 				stringValue(step, 'uploadBinaryProperty', 'data'),
 			);
-			const binaryData = this.helpers.assertBinaryData(itemIndex, propertyName);
-			const buffer = await this.helpers.getBinaryDataBuffer(itemIndex, propertyName);
+			const binaryData = executionContext.helpers.assertBinaryData(itemIndex, propertyName);
+			const buffer = await executionContext.helpers.getBinaryDataBuffer(itemIndex, propertyName);
 			const maximumBytes = settings.maxUploadSizeMb * 1024 * 1024;
 			if (buffer.byteLength > maximumBytes) {
 				throw new BrowserStepError(
@@ -300,21 +429,16 @@ async function executeStep(
 	}
 }
 
-export async function runBrowserSteps(
-	this: IExecuteFunctions,
-	options: {
-		page: Page;
-		steps: BrowserStep[];
-		itemIndex: number;
-		settings: BrowserSettings;
-		result: BrowserItemResult;
-		requestPolicy: BrowserRequestPolicy;
-		abortSignal?: AbortSignal;
-		browserDisconnected: () => boolean;
-	},
+async function runBrowserStepsInternal(
+	executionContext: BrowserStepExecutionContext | undefined,
+	options: RunBrowserStepsOptions,
+	mode: 'execute' | 'picker',
 ): Promise<void> {
 	for (const [stepIndex, step] of options.steps.entries()) {
 		if (options.abortSignal?.aborted) throw new ManualExecutionCancelledError('');
+		if (mode === 'picker' && ['getText', 'getAttribute', 'screenshot'].includes(step.operation)) {
+			continue;
+		}
 		const start = Date.now();
 		const retryEnabled = booleanValue(step, 'retry');
 		const maxRetries = retryEnabled ? numberValue(step, 'maxRetries', 2) : 0;
@@ -332,13 +456,14 @@ export async function runBrowserSteps(
 
 		while (true) {
 			try {
-				await executeStep.call(this, {
+				await executeStep(executionContext, {
 					page: options.page,
 					step,
 					itemIndex: options.itemIndex,
 					settings: options.settings,
 					result: options.result,
 					requestPolicy: options.requestPolicy,
+					abortSignal: options.abortSignal,
 				});
 				break;
 			} catch (error) {
@@ -377,4 +502,25 @@ export async function runBrowserSteps(
 			locator: debugLocator(step),
 		});
 	}
+}
+
+export async function runBrowserSteps(
+	this: IExecuteFunctions,
+	options: RunBrowserStepsOptions,
+): Promise<void> {
+	await runBrowserStepsInternal(this, options, 'execute');
+}
+
+export async function runBrowserStepsForPicker(
+	options: Omit<RunBrowserStepsOptions, 'itemIndex' | 'result'>,
+): Promise<void> {
+	await runBrowserStepsInternal(
+		undefined,
+		{
+			...options,
+			itemIndex: 0,
+			result: { json: {}, binary: undefined, debug: [] },
+		},
+		'picker',
+	);
 }

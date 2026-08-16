@@ -3,7 +3,12 @@ import type { IExecuteFunctions, INode } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
 import { mock, mockDeep } from 'vitest-mock-extended';
 
-import { buildLineErrorText, parseLineApiError } from '../helpers/errors';
+import {
+	buildLineErrorText,
+	LINE_MONTHLY_QUOTA_ERROR_MESSAGE,
+	LineMonthlyQuotaExceededError,
+	parseLineApiError,
+} from '../helpers/errors';
 import { buildMessages, getSendOptions } from '../helpers/message-builder';
 import { buildRetryKey } from '../helpers/send';
 import { chunkRecipientIds, parseRecipientIds } from '../helpers/utils';
@@ -202,7 +207,7 @@ describe('error mapping', () => {
 		);
 	});
 
-	it('wraps a failed request into a NodeApiError carrying the HTTP code', () => {
+	it('classifies a monthly quota error as non-retryable', () => {
 		const context = mockDeep<IExecuteFunctions>();
 		context.getNode.mockReturnValue(node);
 
@@ -212,8 +217,22 @@ describe('error mapping', () => {
 			context: { data: { message: 'You have reached your monthly limit.' } },
 		});
 
+		expect(error).toBeInstanceOf(LineMonthlyQuotaExceededError);
 		expect(error.httpCode).toBe('429');
+		expect(error.message).toBe(LINE_MONTHLY_QUOTA_ERROR_MESSAGE);
+		expect(error.description).toContain('自動再試行されません');
+	});
+
+	it('keeps a temporary 429 as a retryable API error', () => {
+		const context = mockDeep<IExecuteFunctions>();
+		context.getNode.mockReturnValue(node);
+
+		const error = parseLineApiError.call(context, {
+			httpCode: '429',
+			context: { data: { message: 'Too many requests' } },
+		});
+
+		expect(error).not.toBeInstanceOf(LineMonthlyQuotaExceededError);
 		expect(error.message).toBe('LINE rate limit reached');
-		expect(error.description).toContain('You have reached your monthly limit.');
 	});
 });

@@ -13,7 +13,7 @@ import { updateDisplayOptions } from '../../../../utils/utilities';
 const properties: INodeProperties[] = [
 	{
 		displayName:
-			'Broadcast sends the message to every user who added this LINE Official Account as a friend, and cannot be undone',
+			'宛先を指定せず、LINE公式アカウントを友だち追加しているすべての対象ユーザーへ送信します。実行後は取り消せません。',
 		name: 'broadcastNotice',
 		type: 'notice',
 		default: '',

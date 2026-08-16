@@ -1,6 +1,6 @@
 import type { Browser, Page } from 'playwright-core';
-import type { IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
-import { ManualExecutionCancelledError, NodeOperationError } from 'n8n-workflow';
+import type { IExecuteFunctions, INodeExecutionData, WorkflowExecuteMode } from 'n8n-workflow';
+import { ManualExecutionCancelledError } from 'n8n-workflow';
 import { mockDeep } from 'vitest-mock-extended';
 
 import type { BrowserPageSession } from '../helpers/browser';
@@ -35,6 +35,10 @@ const step: BrowserStep = {
 };
 
 function createContext(options?: {
+	headless?: boolean;
+	closeBrowserImmediately?: boolean;
+	browserCloseDelay?: number;
+	mode?: WorkflowExecuteMode;
 	errorBehavior?: 'output' | 'throw';
 	captureScreenshot?: boolean;
 	debugMode?: boolean;
@@ -43,6 +47,9 @@ function createContext(options?: {
 }) {
 	const context = mockDeep<IExecuteFunctions>();
 	const parameters: Record<string, unknown> = {
+		headless: options?.headless ?? false,
+		closeBrowserImmediately: options?.closeBrowserImmediately ?? true,
+		browserCloseDelay: options?.browserCloseDelay ?? 30000,
 		browserSettings: {},
 		steps: { step: [step] },
 		errorBehavior: options?.errorBehavior ?? 'output',
@@ -53,6 +60,7 @@ function createContext(options?: {
 	context.getInputData.mockReturnValue([{ json: { source: 'sheet' } }]);
 	context.getNodeParameter.mockImplementation((name) => parameters[name] as never);
 	context.getExecutionCancelSignal.mockReturnValue(options?.abortSignal);
+	context.getMode.mockReturnValue(options?.mode ?? 'manual');
 	context.continueOnFail.mockReturnValue(options?.continueOnFail ?? false);
 	context.helpers.prepareBinaryData.mockImplementation(async (data, fileName, mimeType) => ({
 		data: data.toString('base64'),
@@ -78,6 +86,8 @@ describe('Browser Automation execution routing', () => {
 		vi.clearAllMocks();
 		vi.mocked(launchChromium).mockResolvedValue(browser);
 		vi.mocked(createBrowserPageSession).mockResolvedValue(session);
+		vi.mocked(closeBrowserPageSession).mockResolvedValue(undefined);
+		vi.mocked(closeBrowser).mockResolvedValue(undefined);
 		page.isClosed.mockReturnValue(false);
 		page.screenshot.mockResolvedValue(Buffer.from('screenshot'));
 	});
@@ -98,8 +108,68 @@ describe('Browser Automation execution routing', () => {
 			},
 		]);
 		expect(error).toEqual([]);
+		expect(launchChromium).toHaveBeenCalledWith(expect.objectContaining({ headless: false }));
 		expect(closeBrowserPageSession).toHaveBeenCalledWith(session);
 		expect(closeBrowser).toHaveBeenCalledWith(browser);
+	});
+
+	it('launches Chromium in headless mode only when enabled', async () => {
+		const context = createContext({ headless: true });
+
+		await executeBrowserAutomation.call(context);
+
+		expect(launchChromium).toHaveBeenCalledWith(expect.objectContaining({ headless: true }));
+	});
+
+	it('keeps the browser visible for the configured delay after a manual execution', async () => {
+		vi.useFakeTimers();
+		try {
+			const context = createContext({
+				closeBrowserImmediately: false,
+				browserCloseDelay: 30000,
+			});
+
+			const execution = executeBrowserAutomation.call(context);
+			await vi.advanceTimersByTimeAsync(29999);
+			expect(closeBrowserPageSession).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(1);
+			await execution;
+			expect(closeBrowserPageSession).toHaveBeenCalledWith(session);
+			expect(closeBrowser).toHaveBeenCalledWith(browser);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('closes the browser immediately for automatic executions', async () => {
+		const context = createContext({ closeBrowserImmediately: false, mode: 'trigger' });
+
+		await executeBrowserAutomation.call(context);
+
+		expect(closeBrowserPageSession).toHaveBeenCalledWith(session);
+		expect(closeBrowser).toHaveBeenCalledWith(browser);
+	});
+
+	it('cleans up when a manual execution is cancelled during the display delay', async () => {
+		vi.useFakeTimers();
+		try {
+			const controller = new AbortController();
+			const context = createContext({
+				closeBrowserImmediately: false,
+				browserCloseDelay: 30000,
+				abortSignal: controller.signal,
+			});
+
+			const execution = executeBrowserAutomation.call(context);
+			await vi.advanceTimersByTimeAsync(0);
+			controller.abort();
+			await expect(execution).rejects.toBeInstanceOf(ManualExecutionCancelledError);
+			expect(closeBrowserPageSession).toHaveBeenCalledWith(session);
+			expect(closeBrowser).toHaveBeenCalledWith(browser);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('routes structured failures and error screenshots to the Error output', async () => {
@@ -119,6 +189,7 @@ describe('Browser Automation execution routing', () => {
 					type: 'ELEMENT_NOT_FOUND',
 					step: 4,
 					operation: 'click',
+					operationName: 'ボタンなどをクリック',
 					retryCount: 2,
 					screenshotBinaryProperty: 'errorScreenshot',
 				},
@@ -130,13 +201,49 @@ describe('Browser Automation execution routing', () => {
 		});
 	});
 
+	it('shows a sanitized error panel before closing a visible browser', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(runBrowserSteps).mockRejectedValue(
+				new BrowserStepFailure(new BrowserStepError('ELEMENT_NOT_FOUND'), 2, step, 3),
+			);
+			const context = createContext({
+				closeBrowserImmediately: false,
+				browserCloseDelay: 30000,
+			});
+
+			const execution = executeBrowserAutomation.call(context);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(page.evaluate).toHaveBeenCalledWith(expect.any(Function), {
+				type: 'ELEMENT_NOT_FOUND',
+				step: 4,
+				operationName: 'ボタンなどをクリック',
+				message: '指定された要素が見つかりませんでした。',
+			});
+			expect(closeBrowserPageSession).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(30000);
+			const output = await execution;
+			expect(output[1][0].json).toMatchObject({
+				success: false,
+				browserError: { type: 'ELEMENT_NOT_FOUND', step: 4 },
+			});
+			expect(closeBrowserPageSession).toHaveBeenCalledWith(session);
+			expect(closeBrowser).toHaveBeenCalledWith(browser);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('uses n8n failure handling when configured to stop the workflow', async () => {
 		vi.mocked(runBrowserSteps).mockRejectedValue(
 			new BrowserStepFailure(new BrowserStepError('ELEMENT_DISABLED'), 0, step, 0),
 		);
 		const context = createContext({ errorBehavior: 'throw' });
 
-		await expect(executeBrowserAutomation.call(context)).rejects.toBeInstanceOf(NodeOperationError);
+		await expect(executeBrowserAutomation.call(context)).rejects.toThrow(
+			'操作1（ボタンなどをクリック）でエラーが発生しました。原因：指定された要素が無効になっています。',
+		);
 		expect(closeBrowserPageSession).toHaveBeenCalledWith(session);
 		expect(closeBrowser).toHaveBeenCalledWith(browser);
 	});

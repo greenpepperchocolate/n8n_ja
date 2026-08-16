@@ -11,9 +11,11 @@ export type BrowserStepOperation =
 	| 'getText'
 	| 'getAttribute'
 	| 'uploadFile'
-	| 'screenshot';
+	| 'screenshot'
+	| 'scroll';
 
 export type BrowserLocatorType =
+	| 'picker'
 	| 'role'
 	| 'label'
 	| 'placeholder'
@@ -34,7 +36,14 @@ export interface BrowserLocatorDefinition {
 	value?: string;
 	role?: string;
 	name?: string;
+	frames?: BrowserFrameDefinition[];
+	/** Existing version-one workflows store a single IFrame here. */
 	frame?: BrowserFrameDefinition;
+}
+
+export interface BrowserPickerLocatorVariants {
+	single: BrowserLocatorDefinition;
+	allVisible: BrowserLocatorDefinition;
 }
 
 export interface BrowserStep extends IDataObject {
@@ -43,6 +52,9 @@ export interface BrowserStep extends IDataObject {
 	locatorValue?: string;
 	locatorRole?: string;
 	locatorName?: string;
+	pickerLocatorVariants?: string;
+	iframePath?: IDataObject;
+	/** Existing version-one workflows use these single-IFrame fields. */
 	frameType?: BrowserFrameType;
 	frameValue?: string;
 	retry?: boolean;
@@ -81,6 +93,8 @@ export type BrowserErrorType =
 	| 'POPUP_TIMEOUT'
 	| 'UPLOAD_FAILED'
 	| 'SCREENSHOT_FAILED'
+	| 'SCROLL_FAILED'
+	| 'SCROLL_LIMIT_REACHED'
 	| 'BROWSER_LAUNCH_FAILED'
 	| 'BROWSER_CRASHED'
 	| 'NETWORK_ERROR'
@@ -93,6 +107,7 @@ export interface BrowserErrorOutput extends IDataObject {
 	type: BrowserErrorType;
 	step: number;
 	operation: BrowserStepOperation;
+	operationName: string;
 	message: string;
 	url: string;
 	locator: IDataObject;

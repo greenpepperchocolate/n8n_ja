@@ -13,6 +13,13 @@ import { updateDisplayOptions } from '../../../../utils/utilities';
 
 const properties: INodeProperties[] = [
 	{
+		displayName:
+			'1つのUser ID、Group ID、またはRoom IDを指定して送信します。個人だけでなく、グループやトークルームにも送信できます。',
+		name: 'pushNotice',
+		type: 'notice',
+		default: '',
+	},
+	{
 		displayName: 'To',
 		name: 'to',
 		type: 'string',

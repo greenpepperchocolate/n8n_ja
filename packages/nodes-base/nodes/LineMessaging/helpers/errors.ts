@@ -1,5 +1,6 @@
 import type {
 	IExecuteFunctions,
+	INode,
 	ILoadOptionsFunctions,
 	IWebhookFunctions,
 	JsonObject,
@@ -19,6 +20,7 @@ interface WrappedRequestError {
 	httpCode?: string | null;
 	message?: string;
 	context?: { data?: unknown };
+	errorResponse?: unknown;
 	cause?: { response?: { status?: number; data?: unknown } };
 	response?: { status?: number; data?: unknown };
 }
@@ -43,6 +45,7 @@ export function getLineErrorBody(error: unknown): LineApiErrorBody | undefined {
 
 	for (const candidate of [
 		wrapped.context?.data,
+		wrapped.errorResponse,
 		wrapped.cause?.response?.data,
 		wrapped.response?.data,
 	]) {
@@ -84,9 +87,46 @@ const STATUS_DESCRIPTIONS: Record<string, string> = {
 	'409':
 		'LINE had already accepted a request carrying this retry key, so the message was delivered by the earlier attempt and was not sent again.',
 	'429':
-		'Too many messages were sent in a short time, or the monthly message quota is exhausted. Lower the send rate, or enable "Retry On Fail" on this node to retry with a delay.',
+		'Too many messages were sent in a short time. Lower the send rate, or enable "Retry On Fail" on this node to retry with a delay.',
 	'500': 'This is a problem on the LINE side. Retry the request later.',
 };
+
+export const LINE_MONTHLY_QUOTA_ERROR_TYPE = 'MONTHLY_QUOTA_EXCEEDED';
+export const LINE_MONTHLY_QUOTA_ERROR_MESSAGE = 'LINEの月間メッセージ送信上限に達しました';
+export const LINE_MONTHLY_QUOTA_ERROR_DESCRIPTION =
+	'メッセージは送信されませんでした。LINE Official Account Managerで料金プランと月間上限を確認してください。このエラーは自動再試行されません。';
+
+function isMonthlyQuotaError(
+	statusCode: string | undefined,
+	body: LineApiErrorBody | undefined,
+	fallbackMessage: string | undefined,
+): boolean {
+	if (statusCode !== '429') return false;
+
+	const apiText = [
+		body?.message,
+		...(body?.details?.map((detail) => detail.message) ?? []),
+		fallbackMessage,
+	]
+		.filter((part): part is string => typeof part === 'string')
+		.join(' ');
+
+	return /monthly\s+(?:message\s+)?(?:limit|quota)|(?:limit|quota).+monthly/i.test(apiText);
+}
+
+export class LineMonthlyQuotaExceededError extends NodeApiError {
+	readonly lineErrorType = LINE_MONTHLY_QUOTA_ERROR_TYPE;
+
+	constructor(node: INode, body: LineApiErrorBody, itemIndex?: number) {
+		super(node, body as JsonObject, {
+			message: LINE_MONTHLY_QUOTA_ERROR_MESSAGE,
+			description: LINE_MONTHLY_QUOTA_ERROR_DESCRIPTION,
+			httpCode: '429',
+			itemIndex,
+			level: 'warning',
+		});
+	}
+}
 
 /** Recognisable LINE error texts that deserve a clearer message than the raw API wording. */
 const MESSAGE_OVERRIDES: Array<{ match: RegExp; message: string; description: string }> = [
@@ -127,6 +167,13 @@ export function buildLineErrorText(
 	const apiMessage = typeof body?.message === 'string' ? body.message : undefined;
 	const details = formatDetails(body);
 
+	if (isMonthlyQuotaError(statusCode, body, fallbackMessage)) {
+		return {
+			message: LINE_MONTHLY_QUOTA_ERROR_MESSAGE,
+			description: LINE_MONTHLY_QUOTA_ERROR_DESCRIPTION,
+		};
+	}
+
 	const override = apiMessage
 		? MESSAGE_OVERRIDES.find(({ match }) => match.test(apiMessage))
 		: undefined;
@@ -166,6 +213,10 @@ export function parseLineApiError(
 	const body = getLineErrorBody(error);
 	const fallbackMessage =
 		isRecord(error) && typeof error.message === 'string' ? error.message : undefined;
+
+	if (isMonthlyQuotaError(statusCode, body, fallbackMessage)) {
+		return new LineMonthlyQuotaExceededError(this.getNode(), body ?? {}, itemIndex);
+	}
 
 	const { message, description } = buildLineErrorText(statusCode, body, fallbackMessage);
 

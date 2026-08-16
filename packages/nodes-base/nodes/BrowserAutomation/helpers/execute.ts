@@ -2,7 +2,7 @@ import type { IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 import { ManualExecutionCancelledError, NodeOperationError } from 'n8n-workflow';
 import type { Browser, Page } from 'playwright-core';
 
-import type { BrowserItemResult, BrowserSettings, BrowserStep } from '../types';
+import type { BrowserErrorOutput, BrowserItemResult, BrowserSettings, BrowserStep } from '../types';
 import {
 	closeBrowser,
 	closeBrowserPageSession,
@@ -14,7 +14,7 @@ import { BrowserStepError, BrowserStepFailure, createBrowserErrorOutput } from '
 import { runBrowserSteps } from './steps';
 
 const DEFAULT_SETTINGS: BrowserSettings = {
-	headless: true,
+	headless: false,
 	browserTimeout: 30000,
 	navigationTimeout: 30000,
 	viewportWidth: 1280,
@@ -46,8 +46,9 @@ function stringSetting(value: Record<string, unknown>, name: string, fallback: s
 function readSettings(this: IExecuteFunctions, itemIndex: number): BrowserSettings {
 	const raw: unknown = this.getNodeParameter('browserSettings', itemIndex, {});
 	const value = isRecord(raw) ? raw : {};
+	const headless: unknown = this.getNodeParameter('headless', itemIndex, DEFAULT_SETTINGS.headless);
 	return {
-		headless: booleanSetting(value, 'headless', DEFAULT_SETTINGS.headless),
+		headless: typeof headless === 'boolean' ? headless : DEFAULT_SETTINGS.headless,
 		browserTimeout: numberSetting(value, 'browserTimeout', DEFAULT_SETTINGS.browserTimeout),
 		navigationTimeout: numberSetting(
 			value,
@@ -101,6 +102,103 @@ function booleanParameter(
 	return context.getNodeParameter(name, itemIndex, fallback) === true;
 }
 
+function numberParameter(
+	context: IExecuteFunctions,
+	name: string,
+	itemIndex: number,
+	fallback: number,
+): number {
+	const value: unknown = context.getNodeParameter(name, itemIndex, fallback);
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function shouldDelayBrowserClose(
+	context: IExecuteFunctions,
+	itemIndex: number,
+	settings: BrowserSettings,
+): boolean {
+	return (
+		context.getMode() === 'manual' &&
+		!settings.headless &&
+		!booleanParameter(context, 'closeBrowserImmediately', itemIndex, false)
+	);
+}
+
+async function waitBeforeClosingBrowser(
+	context: IExecuteFunctions,
+	itemIndex: number,
+	settings: BrowserSettings,
+	abortSignal?: AbortSignal,
+): Promise<void> {
+	if (!shouldDelayBrowserClose(context, itemIndex, settings)) return;
+
+	const delay = numberParameter(context, 'browserCloseDelay', itemIndex, 30000);
+	if (abortSignal?.aborted) throw new ManualExecutionCancelledError('');
+
+	await new Promise<void>((resolve, reject) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(new ManualExecutionCancelledError(''));
+		};
+		const timer = setTimeout(() => {
+			abortSignal?.removeEventListener('abort', onAbort);
+			resolve();
+		}, delay);
+		abortSignal?.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
+async function showBrowserErrorOverlay(
+	page: Page,
+	browserError: BrowserErrorOutput,
+): Promise<void> {
+	if (page.isClosed()) return;
+	try {
+		await page.evaluate(
+			(details) => {
+				document.querySelector('[data-n8n-browser-error]')?.remove();
+				const panel = document.createElement('section');
+				panel.dataset.n8nBrowserError = 'true';
+				panel.setAttribute('role', 'alert');
+				Object.assign(panel.style, {
+					position: 'fixed',
+					top: '16px',
+					right: '16px',
+					zIndex: '2147483647',
+					maxWidth: '480px',
+					padding: '18px',
+					border: '2px solid #b42318',
+					borderRadius: '8px',
+					background: '#fff4f2',
+					color: '#7a271a',
+					font: '14px/1.5 system-ui, sans-serif',
+					boxShadow: '0 8px 24px rgb(0 0 0 / 25%)',
+				});
+				const title = document.createElement('strong');
+				title.textContent = `操作${details.step}（${details.operationName}）でエラー`;
+				title.style.display = 'block';
+				title.style.fontSize = '16px';
+				const summary = document.createElement('div');
+				summary.textContent = `エラーの種類：${details.type}`;
+				summary.style.marginTop = '8px';
+				const message = document.createElement('div');
+				message.textContent = `原因：${details.message}`;
+				message.style.marginTop = '8px';
+				panel.append(title, summary, message);
+				document.documentElement.append(panel);
+			},
+			{
+				type: browserError.type,
+				step: browserError.step,
+				operationName: browserError.operationName,
+				message: browserError.message,
+			},
+		);
+	} catch {
+		// The original browser error remains authoritative if the page cannot render the panel.
+	}
+}
+
 function stringParameter(
 	context: IExecuteFunctions,
 	name: string,
@@ -152,24 +250,35 @@ async function appendFailure(
 	options: {
 		failure: BrowserStepFailure;
 		page?: Page;
+		settings?: BrowserSettings;
+		abortSignal?: AbortSignal;
 		itemIndex: number;
 		errorItems: INodeExecutionData[];
 		debug: BrowserItemResult['debug'];
 	},
 ): Promise<void> {
-	if (!shouldOutputError.call(this, options.itemIndex)) {
-		throw new NodeOperationError(this.getNode(), options.failure.error.message, {
-			itemIndex: options.itemIndex,
-			description: `Browser error type: ${options.failure.error.type}; step: ${options.failure.stepIndex + 1}`,
-		});
-	}
-
 	const browserError = createBrowserErrorOutput({
 		failure: options.failure,
 		page: options.page,
 	});
 	const screenshot = await captureErrorScreenshot.call(this, options.page, options.itemIndex);
 	if (screenshot) browserError.screenshotBinaryProperty = screenshot.propertyName;
+	if (
+		options.page &&
+		options.settings &&
+		shouldDelayBrowserClose(this, options.itemIndex, options.settings)
+	) {
+		await showBrowserErrorOverlay(options.page, browserError);
+		await waitBeforeClosingBrowser(this, options.itemIndex, options.settings, options.abortSignal);
+	}
+
+	if (!shouldOutputError.call(this, options.itemIndex)) {
+		throw new NodeOperationError(this.getNode(), options.failure.message, {
+			itemIndex: options.itemIndex,
+			description: `エラーの種類：${options.failure.error.type}`,
+		});
+	}
+
 	const debugMode = booleanParameter(this, 'debugMode', options.itemIndex, false);
 
 	options.errorItems.push({
@@ -223,6 +332,7 @@ export async function executeBrowserAutomation(
 			const settings = readSettings.call(this, itemIndex);
 			const steps = readSteps.call(this, itemIndex);
 			let session: BrowserPageSession | undefined;
+			let completedSuccessfully = false;
 			const result: BrowserItemResult = {
 				json: { ...items[itemIndex].json },
 				binary: items[itemIndex].binary ? { ...items[itemIndex].binary } : undefined,
@@ -259,6 +369,7 @@ export async function executeBrowserAutomation(
 					binary: result.binary,
 					pairedItem: { item: itemIndex },
 				});
+				completedSuccessfully = true;
 			} catch (error) {
 				if (abortSignal?.aborted) throw new ManualExecutionCancelledError('');
 				const failure =
@@ -273,12 +384,20 @@ export async function executeBrowserAutomation(
 				await appendFailure.call(this, {
 					failure,
 					page: session?.page,
+					settings,
+					abortSignal,
 					itemIndex,
 					errorItems,
 					debug: result.debug,
 				});
 			} finally {
-				await closeBrowserPageSession(session);
+				try {
+					if (completedSuccessfully && itemIndex === items.length - 1) {
+						await waitBeforeClosingBrowser(this, itemIndex, settings, abortSignal);
+					}
+				} finally {
+					await closeBrowserPageSession(session);
+				}
 			}
 		}
 	} finally {

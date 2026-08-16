@@ -307,7 +307,7 @@ Message: {{$json["name"]}}様
 
 ## Retryと重複送信防止
 
-このノードは、内部で無制限な自動Retryを行いません。429や一時的な5xxなどを再試行する場合は、n8nノード設定の**Retry On Fail**を使用してください。
+このノードは、内部で無制限な自動Retryを行いません。一時的な429や5xxなどを再試行する場合は、n8nノード設定の**Retry On Fail**を使用してください。月間送信上限エラーは再試行の対象外です。
 
 Push、Multicast、Broadcastには`X-Line-Retry-Key`を付けます。同じn8n実行、Node、Run、Item、Endpoint、Chunkの再試行では同じRetry Keyを再利用するため、レスポンス消失後の再試行による重複送信をLINE側で防止できます。
 
@@ -326,15 +326,15 @@ Replyは1回限りのReply Tokenを使うため、Retry Keyを付けません。
 
 LINE APIのエラーをn8nのNodeApiErrorとして返し、原因に応じた説明を表示します。
 
-| Status | 主な確認項目                                                        |
-| -----: | ------------------------------------------------------------------- |
-|    400 | Message、宛先ID、Reply Token、有効期限、文字数を確認                |
-|    401 | Channel Access Tokenを再発行し、Credentialを更新                    |
-|    403 | TokenとMessaging APIチャネルの組み合わせ、権限を確認                |
-|    404 | User／Group／Room ID、友だち追加状態を確認                          |
-|    409 | 同じRetry Keyで受理済み。送信系Operationでは成功として処理          |
-|    429 | 送信頻度または月間送信上限を確認し、必要に応じてRetry On Failを設定 |
-|    5xx | LINE側の一時的エラー。時間をおいて再試行                            |
+| Status | 主な確認項目                                                          |
+| -----: | --------------------------------------------------------------------- |
+|    400 | Message、宛先ID、Reply Token、有効期限、文字数を確認                  |
+|    401 | Channel Access Tokenを再発行し、Credentialを更新                      |
+|    403 | TokenとMessaging APIチャネルの組み合わせ、権限を確認                  |
+|    404 | User／Group／Room ID、友だち追加状態を確認                            |
+|    409 | 同じRetry Keyで受理済み。送信系Operationでは成功として処理            |
+|    429 | 一時的な送信頻度制限。送信間隔を空け、必要に応じてRetry On Failを設定 |
+|    5xx | LINE側の一時的エラー。時間をおいて再試行                              |
 
 ノードの**On Error／Continue On Fail**を有効にすると、失敗した入力Itemだけ次の形式で出力し、残りのItemを処理します。
 
@@ -343,6 +343,67 @@ LINE APIのエラーをn8nのNodeApiErrorとして返し、原因に応じた説
 	"error": "エラーメッセージ"
 }
 ```
+
+月間メッセージ送信上限に達した場合は、一時的な429と区別して自動再試行しません。LINEのエラー文言だけで判別できない429では、月間上限と当月使用数を確認します。上限到達を確認したら追加のAPI送信を止め、出力画面に警告を表示して、未送信Itemを次の形式で返します。
+
+```json
+{
+	"success": false,
+	"lineError": {
+		"type": "MONTHLY_QUOTA_EXCEEDED",
+		"message": "LINEの月間メッセージ送信上限に達しました",
+		"description": "メッセージは送信されませんでした。LINE Official Account Managerで料金プランと月間上限を確認してください。このエラーは自動再試行されません。",
+		"httpCode": 429,
+		"retryable": false,
+		"timestamp": "2026-08-13T00:00:00.000Z"
+	}
+}
+```
+
+### 月間上限エラーをメールで通知する
+
+月間上限エラーは自動再試行を防ぐため、通常のNode Errorではなく`success: false`のItemとして出力します。そのため、Error TriggerではなくIFノードで分岐します。
+
+```text
+LINE
+  ↓
+IF
+  ├─ true: GmailまたはSend Email
+  └─ false: 通常の後続処理
+```
+
+IFノードへ次の条件を設定します。
+
+| 設定      | 値                            |
+| --------- | ----------------------------- |
+| Value 1   | `{{ $json.lineError?.type }}` |
+| Operation | `is equal to`                 |
+| Value 2   | `MONTHLY_QUOTA_EXCEEDED`      |
+
+GmailまたはSend Emailノードの送信先には、通知を受け取るメールアドレスを指定します。n8nへ登録したユーザーのメールアドレスは自動入力されません。また、GmailやSMTPのCredentialは送信元の認証に使われるため、通知先とは別に設定します。
+
+件名例:
+
+```text
+LINEの月間メッセージ送信上限に達しました
+```
+
+本文例:
+
+```text
+LINEのメッセージを送信できませんでした。
+
+エラー:
+{{ $json.lineError.message }}
+
+詳細:
+{{ $json.lineError.description }}
+
+発生日時:
+{{ $json.lineError.timestamp }}
+```
+
+月間上限以外の通常のNode Errorを通知する場合は、別のError Triggerワークフローを使用できます。
 
 ## Webhook署名検証
 

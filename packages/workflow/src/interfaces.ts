@@ -1818,11 +1818,17 @@ export interface ILoadOptions {
 	};
 }
 
-export type NodePropertyAction = {
-	type: 'askAiCodeGeneration';
-	handler?: string;
-	target?: string;
-};
+export type NodePropertyAction =
+	| {
+			type: 'askAiCodeGeneration';
+			handler?: string;
+			target: string;
+	  }
+	| {
+			type: 'invokeNodeAction';
+			handler: string;
+			targets: Record<string, string>;
+	  };
 
 export interface CalloutActionBase {
 	type: string;
